@@ -1,6 +1,6 @@
 .PHONY: build/linux
 build/linux:
-	GOOS=linux go build -trimpath -o build/linux/cp ./...
+	GOOS=linux go build -trimpath -o build/linux/cp .
 
 .PHONY: build/docker
 build/docker: build/linux
@@ -16,7 +16,7 @@ run/cp: build/docker
 	kubectl rollout restart deployment/bear-kong-cp
 
 APP ?= app-1
-run/apps:
+run/apps: k3d/load-base-image
 	kubectl apply -f k8s/app-1.yaml
 	kubectl apply -f k8s/app-2.yaml
 	kubectl apply -f k8s/app-3.yaml
@@ -38,3 +38,15 @@ exec/envoy/stats:
 .PHONY: k3d/stop
 k3d/stop:
 	k3d cluster delete bear-kong-k8s
+
+.PHONY: k3d/pull-base-image
+k3d/pull-base-image:
+	docker pull envoyproxy/envoy:v1.26.1
+	docker pull nicholasjackson/fake-service:v0.25.2
+	docker pull nicolaka/netshoot
+
+.PHONY: k3d/load-base-image
+k3d/load-base-image:
+	k3d image import --mode=direct --cluster bear-kong-k8s envoyproxy/envoy:v1.26.1
+	k3d image import --mode=direct --cluster bear-kong-k8s nicholasjackson/fake-service:v0.25.2
+	k3d image import --mode=direct --cluster bear-kong-k8s nicolaka/netshoot

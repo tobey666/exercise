@@ -3,11 +3,10 @@ package main
 import (
 	"context"
 	"encoding/json"
-	clusterv3 "github.com/envoyproxy/go-control-plane/envoy/config/cluster/v3"
-	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
-	endpointv3 "github.com/envoyproxy/go-control-plane/envoy/config/endpoint/v3"
+	"sync"
+	"time"
+
 	route "github.com/envoyproxy/go-control-plane/envoy/config/route/v3"
-	matcherv3 "github.com/envoyproxy/go-control-plane/envoy/type/matcher/v3"
 	"github.com/envoyproxy/go-control-plane/pkg/cache/types"
 	"github.com/envoyproxy/go-control-plane/pkg/cache/v3"
 	"github.com/envoyproxy/go-control-plane/pkg/resource/v3"
@@ -16,8 +15,10 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/manager/signals"
-	"sync"
-	"time"
+
+	"bear-kong-cp/controller"
+	"bear-kong-cp/envoyservice"
+	"bear-kong-cp/utils"
 )
 
 func main() {
@@ -29,10 +30,12 @@ func main() {
 
 	wg.Add(3)
 	ctx, cancel := context.WithCancel(signals.SetupSignalHandler())
-	mgr, err := createManager(ctx)
+	mgr, err := controller.CreateManager(ctx)
 	if err != nil {
 		panic(err)
 	}
+
+	// start controller-runtime manager
 	go func() {
 		defer wg.Done()
 		err := mgr.Start(ctx)
@@ -41,16 +44,20 @@ func main() {
 			cancel()
 		}
 	}()
+
 	snapshotCache := cache.NewSnapshotCacheWithHeartbeating(ctx, true, cache.IDHash{}, nil, time.Second)
+
+	// run envoy XDS server
 	go func() {
 		defer wg.Done()
-		err := runXDSServer(ctx, snapshotCache)
+		err := envoyservice.RunXDSServer(ctx, snapshotCache)
 		if err != nil {
 			logf.Log.Error(err, "xds service failed")
 			cancel()
 		}
 	}()
-	// goroutine
+
+	// update ads at intervals
 	go func() {
 		ticker := time.NewTicker(time.Second * 5)
 		defer func() {
@@ -60,77 +67,30 @@ func main() {
 		for {
 			select {
 			case <-ctx.Done():
+				logf.Log.Info("shutting down ADS intervals")
 				return
 			case t := <-ticker.C:
 				logf.Log.Info("tick", "time", t)
 				configMap := &corev1.ConfigMap{}
-				err := mgr.GetClient().Get(ctx, k8s_types.NamespacedName{Namespace: "default", Name: ConfigMapName}, configMap)
+				err := mgr.GetClient().Get(ctx, k8s_types.NamespacedName{Namespace: "default", Name: utils.ConfigMapName}, configMap)
 				if err != nil {
-					logf.Log.Error(err, "Failed retrieving conf!")
+					logf.Log.Error(err, "failed retrieving conf!")
+					continue
 				}
-				all := []ServiceMeta{}
+				all := []controller.ServiceMeta{}
 				err = json.Unmarshal([]byte(configMap.Data["config"]), &all)
 				if err != nil {
 					logf.Log.Error(err, "failed reading configMap")
+					continue
 				}
 				var clusters []types.Resource
 				var routes []*route.Route
 				for _, s := range all {
-					routes = append(routes, &route.Route{
-						Name: s.Name,
-						Match: &route.RouteMatch{
-							Headers: []*route.HeaderMatcher{
-								{
-									Name: "service",
-									HeaderMatchSpecifier: &route.HeaderMatcher_StringMatch{
-										StringMatch: &matcherv3.StringMatcher{
-											MatchPattern: &matcherv3.StringMatcher_Exact{
-												Exact: s.Name,
-											},
-										},
-									},
-								},
-							},
-							PathSpecifier: &route.RouteMatch_Prefix{
-								Prefix: "/",
-							},
-						},
-						Action: &route.Route_Route{
-							Route: &route.RouteAction{
-								ClusterSpecifier: &route.RouteAction_Cluster{
-									Cluster: s.Name,
-								},
-							},
-						},
-					})
-					clusters = append(clusters, &clusterv3.Cluster{
-						Name: s.Name,
-						LoadAssignment: &endpointv3.ClusterLoadAssignment{
-							ClusterName: s.Name,
-							Endpoints: []*endpointv3.LocalityLbEndpoints{
-								{
-									LbEndpoints: []*endpointv3.LbEndpoint{
-										{
-											HostIdentifier: &endpointv3.LbEndpoint_Endpoint{
-												Endpoint: &endpointv3.Endpoint{
-													Address: &corev3.Address{
-														Address: &corev3.Address_SocketAddress{
-															SocketAddress: &corev3.SocketAddress{
-																Address: s.Ip,
-																PortSpecifier: &corev3.SocketAddress_PortValue{
-																	PortValue: uint32(s.Port),
-																},
-															},
-														},
-													},
-												},
-											},
-										},
-									},
-								},
-							},
-						},
-					})
+					tmpRoute := envoyservice.NewRoute(s.Name)
+					routes = append(routes, tmpRoute)
+
+					tmpCluster := envoyservice.NewCluster(s.Name, s.Ip, s.Port)
+					clusters = append(clusters, tmpCluster)
 				}
 
 				snap, err := cache.NewSnapshot(time.Now().String(), map[resource.Type][]types.Resource{
@@ -150,13 +110,17 @@ func main() {
 				})
 				if err != nil {
 					logf.Log.Error(err, "failed creating snapshot")
+					continue
 				}
+
 				for _, s := range all {
-					err = snapshotCache.SetSnapshot(ctx, s.Name, snap)
+					err := snapshotCache.SetSnapshot(ctx, s.Name, snap)
+					if err != nil {
+						logf.Log.Error(err, "failed setting snapshot")
+						continue
+					}
 				}
-				if err != nil {
-					logf.Log.Error(err, "failed setting snapshot")
-				}
+				logf.Log.V(1).Info("update ADS at intervals successfully")
 			}
 		}
 	}()

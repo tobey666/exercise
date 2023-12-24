@@ -16,7 +16,7 @@ run/cp: build/docker
 	kubectl rollout restart deployment/bear-kong-cp
 
 APP ?= app-1
-run/apps: k3d/load-base-image
+run/apps:
 	kubectl apply -f k8s/app-1.yaml
 	kubectl apply -f k8s/app-2.yaml
 	kubectl apply -f k8s/app-3.yaml

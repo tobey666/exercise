@@ -1,10 +1,11 @@
 package utils
 
 const (
-	ConfigMapName    = "mesh-map"
-	Enabled          = "enabled"
-	MeshSelector     = "meshed"
-	SystemNamespace  = "kube-system"
-	ServiceStr       = "service"
-	ConfigMapDataKey = "config"
+	ConfigMapName          = "mesh-map"
+	Enabled                = "enabled"
+	MeshSelector           = "meshed"
+	SystemNamespace        = "kube-system"
+	ServiceStr             = "service"
+	ConfigMapDataKey       = "config"
+	ServiceMeshTimeoutAnno = "mesh-timeout"
 )

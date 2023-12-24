@@ -1,16 +1,26 @@
 package envoyservice
 
 import (
+	"time"
+
 	clusterv3 "github.com/envoyproxy/go-control-plane/envoy/config/cluster/v3"
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	endpointv3 "github.com/envoyproxy/go-control-plane/envoy/config/endpoint/v3"
 	route "github.com/envoyproxy/go-control-plane/envoy/config/route/v3"
 	matcherv3 "github.com/envoyproxy/go-control-plane/envoy/type/matcher/v3"
+	"google.golang.org/protobuf/types/known/durationpb"
 
 	"bear-kong-cp/utils"
 )
 
-func NewRoute(name string) *route.Route {
+// NewRoute will generate an envoy route.Route.
+// If the parameter timeout is not nil, we'll set it for Route Action
+func NewRoute(name string, timeout *time.Duration) *route.Route {
+	var timeoutDuration *durationpb.Duration
+	if timeout != nil {
+		timeoutDuration = durationpb.New(*timeout)
+	}
+
 	r := &route.Route{
 		Name: name,
 		Match: &route.RouteMatch{
@@ -35,6 +45,7 @@ func NewRoute(name string) *route.Route {
 				ClusterSpecifier: &route.RouteAction_Cluster{
 					Cluster: name,
 				},
+				Timeout: timeoutDuration,
 			},
 		},
 	}
@@ -42,6 +53,7 @@ func NewRoute(name string) *route.Route {
 	return r
 }
 
+// NewCluster will generate an envoy clusterv3.Cluster
 func NewCluster(name, addr string, port int32) *clusterv3.Cluster {
 	c := &clusterv3.Cluster{
 		Name: name,

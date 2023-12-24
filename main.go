@@ -86,7 +86,7 @@ func main() {
 				var clusters []types.Resource
 				var routes []*route.Route
 				for _, s := range all {
-					tmpRoute := envoyservice.NewRoute(s.Name)
+					tmpRoute := envoyservice.NewRoute(s.Name, s.Timeout)
 					routes = append(routes, tmpRoute)
 
 					tmpCluster := envoyservice.NewCluster(s.Name, s.Ip, s.Port)

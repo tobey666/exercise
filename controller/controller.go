@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	k8s_errors "k8s.io/apimachinery/pkg/api/errors"
@@ -86,6 +87,8 @@ type ServiceMeta struct {
 	Name string `json:"name"`
 	Ip   string `json:"ip"`
 	Port int32  `json:"port"`
+
+	Timeout *time.Duration `json:"timeout"`
 }
 
 func (a *MeshConfReconciler) Reconcile(ctx context.Context, req reconcile.Request) (reconcile.Result, error) {
@@ -106,11 +109,25 @@ func (a *MeshConfReconciler) Reconcile(ctx context.Context, req reconcile.Reques
 			log.V(1).Info("ignore service due to no ClusterIP or Ports", "Service", s.String())
 			continue
 		}
-		srvs = append(srvs, ServiceMeta{
-			Name: s.Name,
-			Ip:   s.Spec.ClusterIP,
-			Port: s.Spec.Ports[0].Port,
-		})
+
+		serviceMeta := ServiceMeta{
+			Name:    s.Name,
+			Ip:      s.Spec.ClusterIP,
+			Port:    s.Spec.Ports[0].Port,
+			Timeout: nil,
+		}
+		// check Service annotation 'mesh-timeout'
+		timeoutStr, ok := s.GetAnnotations()[utils.ServiceMeshTimeoutAnno]
+		if ok {
+			timeout, err := parseServiceMeshTimeoutDuration(timeoutStr)
+			if nil != err {
+				log.Error(err, "failed to get mesh-timeout duration")
+			} else {
+				serviceMeta.Timeout = timeout
+			}
+		}
+
+		srvs = append(srvs, serviceMeta)
 	}
 
 	sort.SliceStable(srvs, func(i, j int) bool {
@@ -187,4 +204,17 @@ func (a *MeshConfReconciler) Reconcile(ctx context.Context, req reconcile.Reques
 	}
 
 	return reconcile.Result{}, nil
+}
+
+func parseServiceMeshTimeoutDuration(timeoutStr string) (*time.Duration, error) {
+	duration, err := time.ParseDuration(timeoutStr)
+	if nil != err {
+		return nil, fmt.Errorf("failed to parse timeout value '%s', error: %w", timeoutStr, err)
+	}
+
+	if duration < 0 {
+		return nil, fmt.Errorf("invalid timeout duration: %s", duration)
+	}
+
+	return &duration, nil
 }
